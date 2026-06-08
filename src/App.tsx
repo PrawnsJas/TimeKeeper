@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import type { UserProfile } from './lib/types'
 import AuthPage from './pages/AuthPage'
-import Dashboard from './pages/Dashboard'
+import AdminDashboard from './pages/AdminDashboard'
+import UserDashboard from './pages/UserDashboard'
+import ChangePasswordPage from './pages/ChangePasswordPage'
+import ProtectedRoute from './components/ProtectedRoute'
 
 function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -40,24 +44,8 @@ function App() {
 
       setProfileLoading(true)
       const { data, error } = await supabase.from('users').select('*').eq('id', session.user.id).single()
-      if (error && data === null) {
-        if (!session.user.email) {
-          setProfile(null)
-          setProfileLoading(false)
-          return
-        }
-        const { data: inserted, error: insertError } = await supabase.from('users')
-          .insert({
-            id: session.user.id,
-            email: session.user.email,
-            role: 'user',
-          })
-          .select('*')
-          .single()
-        setProfile(inserted ?? null)
-        if (insertError) {
-          console.error(insertError)
-        }
+      if (error || !data) {
+        setProfile(null)
         setProfileLoading(false)
         return
       }
@@ -90,14 +78,53 @@ function App() {
     )
   }
 
-  if (!session || !profile) {
-    return <AuthPage />
-  }
-
   return (
-    <div className={`${darkMode ? 'dark' : ''}`}>
-      <Dashboard profile={profile} onSignOut={handleSignOut} onToggleTheme={toggleTheme} darkMode={darkMode} />
-    </div>
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          session && profile ? (
+            profile.must_change_password ? (
+              <Navigate to="/change-password" replace />
+            ) : (
+              <Navigate to={profile.role === 'admin' ? '/admin' : '/user'} replace />
+            )
+          ) : (
+            <AuthPage />
+          )
+        }
+      />
+
+      <Route
+        path="/change-password"
+        element={
+          <ProtectedRoute session={session} profile={profile}>
+            {profile ? <ChangePasswordPage profile={profile} onSignOut={handleSignOut} /> : <Navigate to="/login" replace />}
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute session={session} profile={profile} requiredRole="admin">
+            {profile ? <AdminDashboard profile={profile} onSignOut={handleSignOut} onToggleTheme={toggleTheme} darkMode={darkMode} /> : <Navigate to="/login" replace />}
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/user"
+        element={
+          <ProtectedRoute session={session} profile={profile} requiredRole="user">
+            {profile ? <UserDashboard profile={profile} onSignOut={handleSignOut} onToggleTheme={toggleTheme} darkMode={darkMode} /> : <Navigate to="/login" replace />}
+          </ProtectedRoute>
+        }
+      />
+
+      <Route path="/" element={<Navigate to={session && profile ? (profile.must_change_password ? '/change-password' : profile.role === 'admin' ? '/admin' : '/user') : '/login'} replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }
 

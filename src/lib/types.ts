@@ -4,6 +4,7 @@ export type UserProfile = {
   id: string
   email: string
   role: UserRole
+  must_change_password: boolean
   created_at: string
 }
 

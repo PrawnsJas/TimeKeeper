@@ -21,6 +21,14 @@ const actionLabels = {
   time_out: 'Time Out',
 } as const
 
+type AdminUserSummary = {
+  user_id: string
+  email: string
+  totalHours: number
+  daysWorked: number
+  recordCount: number
+}
+
 export default function Dashboard({ profile, onSignOut, onToggleTheme, darkMode }: Props) {
   const isAdmin = profile.role === 'admin'
   const [records, setRecords] = useState<DtrRecord[]>([])
@@ -37,6 +45,8 @@ export default function Dashboard({ profile, onSignOut, onToggleTheme, darkMode 
   const [editingRecord, setEditingRecord] = useState<DtrRecord | null>(null)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<DtrRecord | null>(null)
+  const [totalUsers, setTotalUsers] = useState(0)
+  const [userSummaries, setUserSummaries] = useState<AdminUserSummary[]>([])
 
   const pageCount = Math.max(1, Math.ceil(count / pageSize))
 
@@ -118,6 +128,52 @@ export default function Dashboard({ profile, onSignOut, onToggleTheme, darkMode 
     }
 
     const { data } = await builder
+    if (isAdmin) {
+      const { count: userCount } = await supabase.from('users').select('id', { count: 'exact', head: true })
+      setTotalUsers(userCount ?? 0)
+
+      let summaryBuilder = supabase
+        .from('dtr')
+        .select('user_id, users(email), time_in, time_out, lunch_out, lunch_in')
+        .order('user_id', { ascending: true })
+      if (filterQuery.type === 'date') {
+        summaryBuilder = summaryBuilder.eq('date', filterQuery.value)
+      } else {
+        const { from: start, to: end } = getMonthBounds(filterQuery.value)
+        summaryBuilder = summaryBuilder.gte('date', start).lte('date', end)
+      }
+
+      const { data: summaryData, error: summaryError } = await summaryBuilder
+      if (!summaryError) {
+        const groups = new Map<string, AdminUserSummary>()
+        const summaryRows = (summaryData ?? []) as Array<{
+          user_id: string
+          users?: { email: string } | Array<{ email: string }>
+          time_in: string | null
+          time_out: string | null
+          lunch_out: string | null
+          lunch_in: string | null
+        }>
+        summaryRows.forEach((entry) => {
+          const userId = entry.user_id
+          let email = entry.user_id
+          if (entry.users) {
+            if (Array.isArray(entry.users)) {
+              email = entry.users[0]?.email ?? entry.user_id
+            } else {
+              email = entry.users.email ?? entry.user_id
+            }
+          }
+          const hours = calculateWorkHours(entry as unknown as DtrRecord)
+          const summary = groups.get(userId) ?? { user_id: userId, email, totalHours: 0, daysWorked: 0, recordCount: 0 }
+          summary.totalHours += hours
+          summary.daysWorked += entry.time_in && entry.time_out ? 1 : 0
+          summary.recordCount += 1
+          groups.set(userId, summary)
+        })
+        setUserSummaries(Array.from(groups.values()).sort((a, b) => b.totalHours - a.totalHours))
+      }
+    }
     const values: DtrRecord[] = (data ?? []) as DtrRecord[]
     const totals = values.map(calculateWorkHours)
     const workedDays = values.filter((record) => record.time_in && record.time_out).length
@@ -300,6 +356,50 @@ export default function Dashboard({ profile, onSignOut, onToggleTheme, darkMode 
           <Card title="Days Worked" value={`${stats.daysWorked}`} description="Complete punch records counted." />
           <Card title="Average Hours" value={formatHours(stats.averageHours)} description="Average per worked day." />
         </section>
+
+        {isAdmin ? (
+          <section className="mt-8 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft dark:border-slate-800 dark:bg-slate-900">
+            <div className="grid gap-4 xl:grid-cols-4">
+              <Card title="Total Users" value={`${totalUsers}`} description="Active accounts in the system." />
+              <Card title="Total Hours" value={formatHours(stats.totalHours)} description="Across the selected period." />
+              <Card title="Days Worked" value={`${stats.daysWorked}`} description="Complete attendance records." />
+              <Card title="Average Hours" value={formatHours(stats.averageHours)} description="Average daily work hours." />
+            </div>
+            <div className="mt-8">
+              <h2 className="text-xl font-semibold">Per-user attendance summary</h2>
+              <div className="mt-4 overflow-x-auto rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950">
+                <table className="min-w-full text-left text-sm text-slate-700 dark:text-slate-200">
+                  <thead>
+                    <tr>
+                      <th className="px-4 py-3">Employee</th>
+                      <th className="px-4 py-3">Hours</th>
+                      <th className="px-4 py-3">Days Worked</th>
+                      <th className="px-4 py-3">Records</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userSummaries.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-6 text-center text-slate-500 dark:text-slate-400">
+                          No summary data available for the selected period.
+                        </td>
+                      </tr>
+                    ) : (
+                      userSummaries.map((summary) => (
+                        <tr key={summary.user_id} className="border-t border-slate-200 dark:border-slate-800">
+                          <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">{summary.email}</td>
+                          <td className="px-4 py-3">{formatHours(summary.totalHours)}</td>
+                          <td className="px-4 py-3">{summary.daysWorked}</td>
+                          <td className="px-4 py-3">{summary.recordCount}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="mt-8 rounded-[2rem] border border-slate-200 bg-white p-6 shadow-soft dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
